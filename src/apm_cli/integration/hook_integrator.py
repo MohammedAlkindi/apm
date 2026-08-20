@@ -363,6 +363,15 @@ _QUOTED_PLUGIN_ROOT_SPLIT = re.compile(
 )
 
 
+# Any plugin-root reference, with or without a trailing path.  Used after the
+# rewrite loop to report references the matcher could not resolve, so a spelling
+# it cannot parse can never deploy without a diagnostic.
+_PLUGIN_ROOT_REFERENCE = re.compile(
+    r"\$\{(?:CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|KIRO_PLUGIN_ROOT|PLUGIN_ROOT)\}"
+    r"[^\s\"']*"
+)
+
+
 def _normalize_quoted_plugin_root(command: str) -> str:
     """Move a closing quote that separates a plugin-root variable from its path."""
     return _QUOTED_PLUGIN_ROOT_SPLIT.sub(
@@ -675,8 +684,10 @@ class HookIntegrator(BaseIntegrator):
             r"\$\{(?:CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|KIRO_PLUGIN_ROOT|PLUGIN_ROOT)\}"
             r"([\\/][^\s\"']+)"
         )
+        handled_plugin_root_refs: set[str] = set()
         for match in re.finditer(plugin_root_pattern, command):
             full_var = match.group(0)
+            handled_plugin_root_refs.add(full_var)
             # Normalize backslashes to forward slashes before Path construction
             # (on Unix, Path treats backslashes as literal filename chars)
             rel_path = match.group(1).replace("\\", "/").lstrip("/")
@@ -711,6 +722,15 @@ class HookIntegrator(BaseIntegrator):
                 _rich_warning(f"Hook script not found: {source_file}")
                 if deploy_root is not None:
                     new_command = new_command.replace(full_var, str(source_file))
+
+        # A reference the matcher cannot parse never enters the loop above, so its
+        # diagnostic would be lost with it.  Scanning the rewritten command here
+        # decouples the warning from the match loop and catches every unresolved
+        # reference regardless of quoting.
+        for residual in _PLUGIN_ROOT_REFERENCE.findall(new_command):
+            if residual in handled_plugin_root_refs:
+                continue
+            _rich_warning(f"Unresolved plugin-root reference in hook command: {residual}")
 
         # Replacements above cannot match this relative-path pattern.
         rel_pattern = r"(\.[\\/][^\s\"']+)"

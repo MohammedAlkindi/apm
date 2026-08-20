@@ -1750,6 +1750,72 @@ class TestScriptPathRewriting:
         assert len(scripts) == 0
         assert "Hook script not found" in capsys.readouterr().out
 
+    def test_unparseable_plugin_root_reference_warns(self, temp_project, capsys):
+        """A reference the matcher cannot parse must still produce a diagnostic."""
+        pkg_dir = temp_project / "pkg"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+
+        integrator = HookIntegrator()
+        cmd, scripts = integrator._rewrite_command_for_target(
+            'echo "${CLAUDE_PLUGIN_ROOT}"',
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        assert len(scripts) == 0
+        assert cmd == 'echo "${CLAUDE_PLUGIN_ROOT}"'
+        assert "Unresolved plugin-root reference" in capsys.readouterr().out
+
+    def test_mismatched_quotes_around_plugin_root_warns(self, temp_project, capsys):
+        """Mismatched quotes are not normalized, so the residual scan must report them."""
+        pkg_dir = temp_project / "pkg"
+        (pkg_dir / "hooks").mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "hooks" / "probe.py").write_text("print('ok')", encoding="utf-8")
+
+        integrator = HookIntegrator()
+        _, scripts = integrator._rewrite_command_for_target(
+            "python3 \"${CLAUDE_PLUGIN_ROOT}'/hooks/probe.py",
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        assert len(scripts) == 0
+        assert "Unresolved plugin-root reference" in capsys.readouterr().out
+
+    def test_resolved_plugin_root_emits_no_residual_warning(self, temp_project, capsys):
+        """The residual scan must stay quiet when every reference was rewritten."""
+        pkg_dir = temp_project / "pkg"
+        (pkg_dir / "hooks").mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "hooks" / "probe.py").write_text("print('ok')", encoding="utf-8")
+
+        integrator = HookIntegrator()
+        for command in (
+            "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/probe.py",
+            'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/probe.py"',
+            'python3 "${CLAUDE_PLUGIN_ROOT}"/hooks/probe.py',
+        ):
+            integrator._rewrite_command_for_target(command, pkg_dir, "my-pkg", "vscode")
+            assert "Unresolved plugin-root reference" not in capsys.readouterr().out
+
+    def test_missing_script_warns_once_not_twice(self, temp_project, capsys):
+        """A matched-but-missing script must not also trip the residual scan."""
+        pkg_dir = temp_project / "pkg"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+
+        integrator = HookIntegrator()
+        integrator._rewrite_command_for_target(
+            "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/absent.py",
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        out = capsys.readouterr().out
+        assert "Hook script not found" in out
+        assert "Unresolved plugin-root reference" not in out
+
     def test_rewrite_claude_project_powershell_path_is_cwd_independent(self, temp_project):
         """Claude project PowerShell hooks must use Claude's project-root variable."""
         pkg_dir = temp_project / "pkg"
