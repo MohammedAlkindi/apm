@@ -349,6 +349,27 @@ _MERGE_HOOK_TARGETS: dict[str, _MergeHookConfig] = {
 _APM_HOOKS_SIDECAR = "apm-hooks.json"
 
 
+# ``"${CLAUDE_PLUGIN_ROOT}"/rest`` is valid, idiomatic shell -- it quotes only
+# the segment that can contain spaces -- but the plugin-root matcher requires a
+# separator immediately after the closing brace, so this spelling matched
+# nothing and was skipped without a diagnostic.  Normalizing it to
+# ``"${CLAUDE_PLUGIN_ROOT}/rest"`` yields the spelling that is already matched,
+# already rewritten, and already covered by tests.
+_QUOTED_PLUGIN_ROOT_SPLIT = re.compile(
+    r"(?P<quote>[\"'])"
+    r"(?P<var>\$\{(?:CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|KIRO_PLUGIN_ROOT|PLUGIN_ROOT)\})"
+    r"(?P=quote)"
+    r"(?P<path>[\\/][^\s\"']+)"
+)
+
+
+def _normalize_quoted_plugin_root(command: str) -> str:
+    """Move a closing quote that separates a plugin-root variable from its path."""
+    return _QUOTED_PLUGIN_ROOT_SPLIT.sub(
+        lambda m: f"{m['quote']}{m['var']}{m['path']}{m['quote']}", command
+    )
+
+
 def _relative_hook_script_bases(
     package_path: Path,
     hook_file_dir: Path | None,
@@ -627,6 +648,7 @@ class HookIntegrator(BaseIntegrator):
     ) -> tuple[str, list[tuple[Path, str]]]:
         """Rewrite plugin-root and relative script references for a target."""
         scripts_to_copy = []
+        command = _normalize_quoted_plugin_root(command)
         new_command = command
 
         if target == "vscode":

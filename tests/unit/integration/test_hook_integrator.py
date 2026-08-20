@@ -1673,6 +1673,83 @@ class TestScriptPathRewriting:
         assert ".claude/hooks/my-pkg/hooks/run.sh" in cmd
         assert len(scripts) == 1
 
+    def test_rewrite_plugin_root_with_quote_before_separator(self, temp_project):
+        """A quote between the variable and the separator must not defeat the matcher."""
+        pkg_dir = temp_project / "pkg"
+        (pkg_dir / "hooks").mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "hooks" / "probe.py").write_text("print('ok')", encoding="utf-8")
+
+        integrator = HookIntegrator()
+        cmd, scripts = integrator._rewrite_command_for_target(
+            'python3 "${CLAUDE_PLUGIN_ROOT}"/hooks/probe.py',
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        assert "${CLAUDE_PLUGIN_ROOT}" not in cmd
+        assert ".github/hooks/scripts/my-pkg/hooks/probe.py" in cmd
+        assert len(scripts) == 1
+        assert cmd.count('"') % 2 == 0
+
+    def test_rewrite_plugin_root_with_single_quote_before_separator(self, temp_project):
+        """Single quotes get the same treatment and stay balanced."""
+        pkg_dir = temp_project / "pkg"
+        (pkg_dir / "hooks").mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "hooks" / "probe.py").write_text("print('ok')", encoding="utf-8")
+
+        integrator = HookIntegrator()
+        cmd, scripts = integrator._rewrite_command_for_target(
+            "python3 '${CLAUDE_PLUGIN_ROOT}'/hooks/probe.py",
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        assert "${CLAUDE_PLUGIN_ROOT}" not in cmd
+        assert ".github/hooks/scripts/my-pkg/hooks/probe.py" in cmd
+        assert len(scripts) == 1
+        assert cmd.count("'") % 2 == 0
+
+    def test_quote_before_separator_matches_fully_quoted_spelling(self, temp_project):
+        """Both spellings must produce the same rewritten command."""
+        pkg_dir = temp_project / "pkg"
+        (pkg_dir / "hooks").mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "hooks" / "run.sh").write_text("#!/bin/bash", encoding="utf-8")
+
+        integrator = HookIntegrator()
+        split_quote, split_scripts = integrator._rewrite_command_for_target(
+            'bash "${CLAUDE_PLUGIN_ROOT}"/hooks/run.sh',
+            pkg_dir,
+            "my-pkg",
+            "claude",
+        )
+        wrapped_quote, wrapped_scripts = integrator._rewrite_command_for_target(
+            'bash "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh"',
+            pkg_dir,
+            "my-pkg",
+            "claude",
+        )
+
+        assert split_quote == wrapped_quote
+        assert len(split_scripts) == len(wrapped_scripts) == 1
+
+    def test_missing_script_with_quote_before_separator_warns(self, temp_project, capsys):
+        """An unresolvable plugin-root reference must not be silently dropped."""
+        pkg_dir = temp_project / "pkg"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+
+        integrator = HookIntegrator()
+        _, scripts = integrator._rewrite_command_for_target(
+            'python3 "${CLAUDE_PLUGIN_ROOT}"/hooks/absent.py',
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        assert len(scripts) == 0
+        assert "Hook script not found" in capsys.readouterr().out
+
     def test_rewrite_claude_project_powershell_path_is_cwd_independent(self, temp_project):
         """Claude project PowerShell hooks must use Claude's project-root variable."""
         pkg_dir = temp_project / "pkg"
