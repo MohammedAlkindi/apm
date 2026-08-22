@@ -1693,7 +1693,7 @@ class TestScriptPathRewriting:
         assert cmd.count('"') % 2 == 0
 
     def test_rewrite_plugin_root_with_single_quote_before_separator(self, temp_project):
-        """Single quotes get the same treatment and stay balanced."""
+        """Single quotes normalize to an expandable, balanced command."""
         pkg_dir = temp_project / "pkg"
         (pkg_dir / "hooks").mkdir(parents=True, exist_ok=True)
         (pkg_dir / "hooks" / "probe.py").write_text("print('ok')", encoding="utf-8")
@@ -1709,7 +1709,8 @@ class TestScriptPathRewriting:
         assert "${CLAUDE_PLUGIN_ROOT}" not in cmd
         assert ".github/hooks/scripts/my-pkg/hooks/probe.py" in cmd
         assert len(scripts) == 1
-        assert cmd.count("'") % 2 == 0
+        assert "'" not in cmd
+        assert cmd.count('"') == 2
 
     def test_quote_before_separator_matches_fully_quoted_spelling(self, temp_project):
         """Both spellings must produce the same rewritten command."""
@@ -1782,6 +1783,21 @@ class TestScriptPathRewriting:
         )
 
         assert len(scripts) == 0
+        assert "Unresolved plugin-root reference" in capsys.readouterr().out
+
+    def test_plugin_root_path_traversal_warns(self, temp_project, capsys):
+        """A rejected traversal must remain visible to the package author."""
+        pkg_dir = temp_project / "pkg"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+
+        _, scripts = HookIntegrator()._rewrite_command_for_target(
+            "python3 ${CLAUDE_PLUGIN_ROOT}/../outside.py",
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        assert scripts == []
         assert "Unresolved plugin-root reference" in capsys.readouterr().out
 
     def test_resolved_plugin_root_emits_no_residual_warning(self, temp_project, capsys):

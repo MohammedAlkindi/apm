@@ -354,7 +354,9 @@ _APM_HOOKS_SIDECAR = "apm-hooks.json"
 # separator immediately after the closing brace, so this spelling matched
 # nothing and was skipped without a diagnostic.  Normalizing it to
 # ``"${CLAUDE_PLUGIN_ROOT}/rest"`` yields the spelling that is already matched,
-# already rewritten, and already covered by tests.
+# already rewritten, and already covered by tests.  Single quotes cannot expand
+# a project-root variable in the emitted Claude command, so normalize them to
+# equivalent double quotes.
 _QUOTED_PLUGIN_ROOT_SPLIT = re.compile(
     r"(?P<quote>[\"'])"
     r"(?P<var>\$\{(?:CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|KIRO_PLUGIN_ROOT|PLUGIN_ROOT)\})"
@@ -375,7 +377,8 @@ _PLUGIN_ROOT_REFERENCE = re.compile(
 def _normalize_quoted_plugin_root(command: str) -> str:
     """Move a closing quote that separates a plugin-root variable from its path."""
     return _QUOTED_PLUGIN_ROOT_SPLIT.sub(
-        lambda m: f"{m['quote']}{m['var']}{m['path']}{m['quote']}", command
+        lambda m: f'"{m["var"]}{m["path"]}"',
+        command,
     )
 
 
@@ -687,7 +690,6 @@ class HookIntegrator(BaseIntegrator):
         handled_plugin_root_refs: set[str] = set()
         for match in re.finditer(plugin_root_pattern, command):
             full_var = match.group(0)
-            handled_plugin_root_refs.add(full_var)
             # Normalize backslashes to forward slashes before Path construction
             # (on Unix, Path treats backslashes as literal filename chars)
             rel_path = match.group(1).replace("\\", "/").lstrip("/")
@@ -696,6 +698,7 @@ class HookIntegrator(BaseIntegrator):
                 source_file = ensure_path_within(package_path / rel_path, package_path)
             except PathTraversalError:
                 continue
+            handled_plugin_root_refs.add(full_var)
             if source_file.exists() and source_file.is_file():
                 target_rel = f"{scripts_base}/{rel_path}"
                 scripts_to_copy.append((source_file, target_rel))
@@ -730,7 +733,10 @@ class HookIntegrator(BaseIntegrator):
         for residual in _PLUGIN_ROOT_REFERENCE.findall(new_command):
             if residual in handled_plugin_root_refs:
                 continue
-            _rich_warning(f"Unresolved plugin-root reference in hook command: {residual}")
+            _rich_warning(
+                "Unresolved plugin-root reference in hook command: "
+                f"{residual}. Use ${{PLUGIN_ROOT}}/relative/path with matching double quotes."
+            )
 
         # Replacements above cannot match this relative-path pattern.
         rel_pattern = r"(\.[\\/][^\s\"']+)"
