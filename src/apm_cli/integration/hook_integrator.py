@@ -68,6 +68,7 @@ from apm_cli.integration.base_integrator import BaseIntegrator, IntegrationResul
 from apm_cli.integration.hook_bundle import copy_deployed_hook_bundle
 from apm_cli.integration.hook_command_paths import (
     iter_plugin_root_paths,
+    iter_relative_script_paths,
     normalize_quoted_plugin_root,
     plugin_root_relative_path,
     unresolved_plugin_root_references,
@@ -690,13 +691,12 @@ class HookIntegrator(BaseIntegrator):
             _rich_warning(
                 f"Unresolved plugin-root reference in package '{package_label}': "
                 f"{printable_ascii_text(residual)}. "
-                "Use ${PLUGIN_ROOT}/relative/path with balanced double quotes, "
+                "Wrap the complete plugin-root reference and relative path in "
+                "balanced double quotes, "
                 "then run apm install again."
             )
 
-        # Replacements above cannot match this relative-path pattern.
-        rel_pattern = r"(?<![.$])(\.[\\/][^\s\"']+)"
-        for match in re.finditer(rel_pattern, new_command):
+        for match in iter_relative_script_paths(new_command):
             rel_ref = match.group(1)
             # Normalize to forward slashes for path resolution
             rel_path = rel_ref[2:].replace("\\", "/")

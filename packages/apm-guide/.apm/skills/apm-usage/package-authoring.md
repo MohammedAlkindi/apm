@@ -185,6 +185,7 @@ For portable hook scripts, quote the complete package-relative path:
 unresolved plugin-root token, follow the package-specific repair: balance the
 quotes, add a relative path, or keep the path inside the package. Then run
 `apm install` again.
+
 Root hook JSON descriptors, symlinks, and `.apm-pin` markers are not
 deployed. JavaScript and TypeScript hook bundles get a minimal
 `package.json` sidecar with the source package's Node `type` (defaulting

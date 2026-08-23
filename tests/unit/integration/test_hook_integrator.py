@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from apm_cli.core.deployment_state import MaterializationStatus
+from apm_cli.integration.hook_command_paths import normalize_quoted_plugin_root
 from apm_cli.integration.hook_integrator import (
     HookIntegrationResult,  # noqa: F401
     HookIntegrator,
@@ -1771,6 +1772,17 @@ class TestScriptPathRewriting:
         assert ".claude/hooks/my-pkg/hooks/my script.py" in cmd
         assert cmd.count('"') == 2
         assert len(scripts) == 1
+
+    def test_quote_normalization_handles_long_escaped_input(self):
+        """Long escaped input must normalize without pathological matching."""
+        escaped_path = r"\ " * 5000
+
+        normalized = normalize_quoted_plugin_root(
+            f'python3 "${{CLAUDE_PLUGIN_ROOT}}"/hooks/{escaped_path}probe.py'
+        )
+
+        assert normalized.startswith('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/')
+        assert normalized.endswith('probe.py"')
 
     def test_missing_script_with_quote_before_separator_warns(self, temp_project, capsys):
         """An unresolvable plugin-root reference must not be silently dropped."""

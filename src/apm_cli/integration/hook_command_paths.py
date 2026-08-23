@@ -20,6 +20,7 @@ _QUOTED_PLUGIN_ROOT_SPLIT = re.compile(
 )
 _PLUGIN_ROOT_PATH_REFERENCE = re.compile(rf"{_PLUGIN_ROOT_TOKEN}({_PLUGIN_ROOT_PATH})")
 _PLUGIN_ROOT_REFERENCE = re.compile(rf"{_PLUGIN_ROOT_TOKEN}[^\s\"']*")
+_RELATIVE_SCRIPT_PATH = re.compile(r"(?<![.$])(\.[\\/][^\s\"']+)")
 
 
 def normalize_quoted_plugin_root(command: str) -> str:
@@ -41,3 +42,8 @@ def plugin_root_relative_path(path: str) -> str:
 def unresolved_plugin_root_references(command: str) -> tuple[str, ...]:
     """Return residual supported references once each, preserving command order."""
     return tuple(dict.fromkeys(_PLUGIN_ROOT_REFERENCE.findall(command)))
+
+
+def iter_relative_script_paths(command: str) -> Iterator[re.Match[str]]:
+    """Yield relative script references without re-matching plugin-root paths."""
+    return iter(_RELATIVE_SCRIPT_PATH.finditer(command))
