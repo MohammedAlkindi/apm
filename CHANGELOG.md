@@ -13,9 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consent over marketplace-plugin `bin/` executable deployment. `--trust-bin`
   approves deployment silently; `--no-trust-bin` skips `bin/` even when policy
   permits it. The `allowExecutables` policy gate still takes precedence. (closes #1620)
+- `apm pack --format agent-plugin` and
+  `apm plugin init --format agent-plugin` now emit strict, portable Agent
+  Plugins 1.0 bundles. The existing no-flag default and `--format plugin` alias
+  both remain Claude-compatible; exact-schema Agent Plugins are admitted as
+  whole units and blocked before deployment until a native client lifecycle
+  qualifies, never projected as legacy primitives. (by @sergio-sisternes-epam;
+  closes #2522) (#2654)
 
 ### Fixed
 
+- `apm uninstall --global` now cleans removed-only target files before deleting their ownership state, while preserving files owned by surviving packages. (#2658)
 - Windows binary is now Authenticode-signed in the release workflow, eliminating
   the `Trojan:Script/Wacatac.H!ml` Windows Defender false positive on unsigned
   PyInstaller bundles. (#2435)
@@ -29,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - YAML expansion guard no longer rejects large anchor-free lockfiles (150K+
   entries) with a false-positive "billion-laughs" error. APM-generated
   lockfiles with no anchors or aliases now load without error. (#2389)
+- `apm install` no longer skips the credential retry on non-English machines.
+  Git localises its diagnostics through gettext, so a translated stderr made an
+  authentication failure unrecognisable and private-repo installs failed with
+  misleading network guidance. Git subprocesses in the authentication retry
+  path now run with `LC_ALL=C` and `LANGUAGE=C`. (by @Naofel-eal, closes #2533)
 
 ### Changed
 
