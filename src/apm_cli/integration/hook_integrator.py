@@ -1,7 +1,6 @@
 """Hook integration functionality for APM packages.
-
-Integrates hook JSON files and their referenced scripts during package
-installation. Supports VSCode Copilot (.github/hooks/), Claude Code
+Integrates hook JSON files and referenced scripts during package installation.
+Supports VSCode Copilot (.github/hooks/), Claude Code
 (.claude/settings.json), and Cursor (.cursor/hooks.json) targets.
 
 Hook JSON format (Claude Code  -- nested matcher groups):
@@ -38,8 +37,7 @@ Hook JSON format (Cursor  -- flat arrays with command key):
     }
 
 Script path handling:
-    - ${CLAUDE_PLUGIN_ROOT}/path, ${CURSOR_PLUGIN_ROOT}/path, ${PLUGIN_ROOT}/path
-      -> resolved relative to package root, rewritten for target
+    - Supported plugin-root aliases -> package-relative path rewritten for target
     - ./path -> relative path, resolved from the hook file context, rewritten for target
     - System commands (no path separators) -> passed through unchanged
 """
@@ -68,6 +66,12 @@ from apm_cli.hook_contract import (
 )
 from apm_cli.integration.base_integrator import BaseIntegrator, IntegrationResult
 from apm_cli.integration.hook_bundle import copy_deployed_hook_bundle
+from apm_cli.integration.hook_command_paths import (
+    iter_plugin_root_paths,
+    normalize_quoted_plugin_root,
+    plugin_root_relative_path,
+    unresolved_plugin_root_references,
+)
 from apm_cli.integration.hook_file_routing import filter_hook_files_for_target
 from apm_cli.integration.hook_native_formats import (
     _to_antigravity_hook_entries,
@@ -356,39 +360,6 @@ _MERGE_HOOK_TARGETS: dict[str, _MergeHookConfig] = {
 _APM_HOOKS_SIDECAR = "apm-hooks.json"
 
 
-# ``"${CLAUDE_PLUGIN_ROOT}"/rest`` is valid, idiomatic shell -- it quotes only
-# the segment that can contain spaces -- but the plugin-root matcher requires a
-# separator immediately after the closing brace, so this spelling matched
-# nothing and was skipped without a diagnostic.  Normalizing it to
-# ``"${CLAUDE_PLUGIN_ROOT}/rest"`` yields the spelling that is already matched,
-# already rewritten, and already covered by tests.  Single quotes cannot expand
-# a project-root variable in the emitted Claude command, so normalize them to
-# equivalent double quotes.
-_QUOTED_PLUGIN_ROOT_SPLIT = re.compile(
-    r"(?P<quote>[\"'])"
-    r"(?P<var>\$\{(?:CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|KIRO_PLUGIN_ROOT|PLUGIN_ROOT)\})"
-    r"(?P=quote)"
-    r"(?P<path>[\\/][^\s\"']+)"
-)
-
-
-# Any plugin-root reference, with or without a trailing path.  Used after the
-# rewrite loop to report references the matcher could not resolve, so a spelling
-# it cannot parse can never deploy without a diagnostic.
-_PLUGIN_ROOT_REFERENCE = re.compile(
-    r"\$\{(?:CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|KIRO_PLUGIN_ROOT|PLUGIN_ROOT)\}"
-    r"[^\s\"']*"
-)
-
-
-def _normalize_quoted_plugin_root(command: str) -> str:
-    """Move a closing quote that separates a plugin-root variable from its path."""
-    return _QUOTED_PLUGIN_ROOT_SPLIT.sub(
-        lambda m: f'"{m["var"]}{m["path"]}"',
-        command,
-    )
-
-
 def _relative_hook_script_bases(
     package_path: Path,
     hook_file_dir: Path | None,
@@ -639,7 +610,7 @@ class HookIntegrator(BaseIntegrator):
     ) -> tuple[str, list[tuple[Path, str]]]:
         """Rewrite plugin-root and relative script references for a target."""
         scripts_to_copy = []
-        command = _normalize_quoted_plugin_root(command)
+        command = normalize_quoted_plugin_root(command)
         new_command = command
 
         if target == "vscode":
@@ -661,21 +632,16 @@ class HookIntegrator(BaseIntegrator):
             base_root = root_dir or ".claude"
             scripts_base = f"{base_root}/hooks/{package_name}"
 
-        # Match plugin-root references with forward or Windows-style separators.
-        plugin_root_pattern = (
-            r"\$\{(?:CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|KIRO_PLUGIN_ROOT|PLUGIN_ROOT)\}"
-            r"([\\/][^\s\"']+)"
-        )
         handled_plugin_root_refs: set[str] = set()
-        for match in re.finditer(plugin_root_pattern, command):
+        traversal_plugin_root_refs: set[str] = set()
+        for match in iter_plugin_root_paths(command):
             full_var = match.group(0)
-            # Normalize backslashes to forward slashes before Path construction
-            # (on Unix, Path treats backslashes as literal filename chars)
-            rel_path = match.group(1).replace("\\", "/").lstrip("/")
+            rel_path = plugin_root_relative_path(match.group(1))
 
             try:
                 source_file = ensure_path_within(package_path / rel_path, package_path)
             except PathTraversalError:
+                traversal_plugin_root_refs.add(full_var)
                 continue
             handled_plugin_root_refs.add(full_var)
             if source_file.exists() and source_file.is_file():
@@ -701,25 +667,35 @@ class HookIntegrator(BaseIntegrator):
                 # project-scope (deploy_root is None) leave the variable in
                 # place -- rewriting to an absolute path would re-introduce
                 # the #1394 portability regression in committed configs.
-                _rich_warning(f"Hook script not found: {source_file}")
+                _rich_warning(
+                    "Hook script not found for package "
+                    f"'{printable_ascii_text(package_name)}': "
+                    f"{printable_ascii_text(str(source_file))}"
+                )
                 if deploy_root is not None:
                     new_command = new_command.replace(full_var, str(source_file))
 
-        # A reference the matcher cannot parse never enters the loop above, so its
-        # diagnostic would be lost with it.  Scanning the rewritten command here
-        # decouples the warning from the match loop and catches every unresolved
-        # reference regardless of quoting.
-        for residual in _PLUGIN_ROOT_REFERENCE.findall(new_command):
+        # Keep matcher misses visible instead of silently deploying them.
+        for residual in unresolved_plugin_root_references(new_command):
             if residual in handled_plugin_root_refs:
                 continue
+            package_label = printable_ascii_text(package_name)
+            if residual in traversal_plugin_root_refs:
+                _rich_warning(
+                    f"Hook path escapes package '{package_label}': "
+                    f"{printable_ascii_text(residual)}. "
+                    "Keep the path inside the package, then run apm install again."
+                )
+                continue
             _rich_warning(
-                "Unresolved plugin-root reference in hook command: "
+                f"Unresolved plugin-root reference in package '{package_label}': "
                 f"{printable_ascii_text(residual)}. "
-                "Use ${PLUGIN_ROOT}/relative/path with matching double quotes."
+                "Use ${PLUGIN_ROOT}/relative/path with balanced double quotes, "
+                "then run apm install again."
             )
 
         # Replacements above cannot match this relative-path pattern.
-        rel_pattern = r"(\.[\\/][^\s\"']+)"
+        rel_pattern = r"(?<![.$])(\.[\\/][^\s\"']+)"
         for match in re.finditer(rel_pattern, new_command):
             rel_ref = match.group(1)
             # Normalize to forward slashes for path resolution
@@ -746,7 +722,11 @@ class HookIntegrator(BaseIntegrator):
             else:
                 # File absent: always warn (see ${PLUGIN_ROOT} branch above
                 # for the project-scope vs user-scope rationale).
-                _rich_warning(f"Hook script not found: {source_file}")
+                _rich_warning(
+                    "Hook script not found for package "
+                    f"'{printable_ascii_text(package_name)}': "
+                    f"{printable_ascii_text(str(source_file))}"
+                )
                 if deploy_root is not None:
                     new_command = new_command.replace(rel_ref, str(source_file))
 

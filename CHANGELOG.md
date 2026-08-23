@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hook commands such as `"${CLAUDE_PLUGIN_ROOT}"/hooks/probe.py` now rewrite
+  correctly and warn when a supported plugin-root placeholder remains
+  unresolved instead of silently deploying a dead hook. (by @MohammedAlkindi;
+  closes #2639) OpenAPM v0.1 (`openapm-v0.1.md`) now binds the behavior as
+  `req-tg-012`. (#2645)
 - `apm uninstall --global` now cleans removed-only target files before deleting their ownership state, while preserving files owned by surviving packages. (#2658)
 - Windows binary is now Authenticode-signed in the release workflow, eliminating
   the `Trojan:Script/Wacatac.H!ml` Windows Defender false positive on unsigned

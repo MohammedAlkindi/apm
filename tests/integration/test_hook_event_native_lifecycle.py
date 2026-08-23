@@ -152,13 +152,19 @@ def test_claude_install_handles_quoted_and_malformed_plugin_roots(
     sources = LocalPackageFactory(isolated.package_root)
     consumers = LocalPackageFactory(isolated.work_root)
     quoted = sources.create("quoted-plugin-root", targets=("claude",))
-    probe = quoted.root / "hooks" / "probe.py"
+    probe = quoted.root / "hooks" / "probe script.py"
     probe.parent.mkdir()
     probe.write_text("print('ok')\n", encoding="utf-8")
     sources.add_hook(
         quoted,
         "quoted-root",
-        {"hooks": {"SessionStart": [_entry('python3 "${CLAUDE_PLUGIN_ROOT}"/hooks/probe.py')]}},
+        {
+            "hooks": {
+                "SessionStart": [
+                    _entry(r'python3 "${CLAUDE_PLUGIN_ROOT}"/hooks/probe\ script.py&&echo done')
+                ]
+            }
+        },
     )
     valid_consumer = consumers.create(
         "quoted-plugin-root-consumer",
@@ -178,7 +184,10 @@ def test_claude_install_handles_quoted_and_malformed_plugin_roots(
     command = _commands(_read_hooks(valid_consumer.root / _CLAUDE_SETTINGS)["SessionStart"])[0]
     assert "${CLAUDE_PLUGIN_ROOT}" not in command
     assert command.count('"') % 2 == 0
-    assert (valid_consumer.root / ".claude/hooks/quoted-plugin-root/hooks/probe.py").is_file()
+    assert command.endswith("&&echo done")
+    assert (
+        valid_consumer.root / ".claude/hooks/quoted-plugin-root/hooks/probe script.py"
+    ).is_file()
     assert "Unresolved plugin-root reference" not in valid.stdout + valid.stderr
 
     malformed = sources.create("malformed-plugin-root", targets=("claude",))
