@@ -158,13 +158,7 @@ def test_claude_install_handles_quoted_and_malformed_plugin_roots(
     sources.add_hook(
         quoted,
         "quoted-root",
-        {
-            "hooks": {
-                "SessionStart": [
-                    _entry('python3 "${CLAUDE_PLUGIN_ROOT}"/hooks/probe.py')
-                ]
-            }
-        },
+        {"hooks": {"SessionStart": [_entry('python3 "${CLAUDE_PLUGIN_ROOT}"/hooks/probe.py')]}},
     )
     valid_consumer = consumers.create(
         "quoted-plugin-root-consumer",
@@ -191,13 +185,7 @@ def test_claude_install_handles_quoted_and_malformed_plugin_roots(
     sources.add_hook(
         malformed,
         "malformed-root",
-        {
-            "hooks": {
-                "SessionStart": [
-                    _entry('python3 "${CLAUDE_PLUGIN_ROOT}\'/hooks/missing.py')
-                ]
-            }
-        },
+        {"hooks": {"SessionStart": [_entry("python3 \"${CLAUDE_PLUGIN_ROOT}'/hooks/missing.py")]}},
     )
     malformed_consumer = consumers.create(
         "malformed-plugin-root-consumer",
@@ -216,8 +204,7 @@ def test_claude_install_handles_quoted_and_malformed_plugin_roots(
     output = malformed_result.stdout + malformed_result.stderr
     assert "Unresolved plugin-root reference" in output
     assert not (
-        malformed_consumer.root
-        / ".claude/hooks/malformed-plugin-root/hooks/missing.py"
+        malformed_consumer.root / ".claude/hooks/malformed-plugin-root/hooks/missing.py"
     ).exists()
 
 
