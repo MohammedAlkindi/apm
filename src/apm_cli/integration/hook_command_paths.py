@@ -40,8 +40,17 @@ def plugin_root_relative_path(path: str) -> str:
 
 
 def unresolved_plugin_root_references(command: str) -> tuple[str, ...]:
-    """Return residual supported references once each, preserving command order."""
+    """Return residual supported references once each, preserving command order.
+
+    Detection is diagnostic only; containment enforcement remains with the caller.
+    """
     return tuple(dict.fromkeys(_PLUGIN_ROOT_REFERENCE.findall(command)))
+
+
+def residual_plugin_root_has_path(command: str, reference: str) -> bool:
+    """Return whether a residual is followed by a direct or split-quoted path."""
+    suffix = rf"{re.escape(reference)}(?:[\\/]|[\"'][\\/])"
+    return re.search(suffix, command) is not None
 
 
 def iter_relative_script_paths(command: str) -> Iterator[re.Match[str]]:

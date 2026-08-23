@@ -1815,7 +1815,9 @@ class TestScriptPathRewriting:
 
         assert len(scripts) == 0
         assert cmd == 'echo "${CLAUDE_PLUGIN_ROOT}"'
-        assert "Unresolved plugin-root reference" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "Plugin-root reference has no path" in output
+        assert "Add a package-relative path after the token" in output
 
     def test_unparseable_plugin_root_warning_escapes_control_characters(self, temp_project, capsys):
         """A package-controlled residual cannot inject terminal controls."""
@@ -1867,7 +1869,9 @@ class TestScriptPathRewriting:
         )
 
         assert len(scripts) == 0
-        assert "Unresolved plugin-root reference" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "Unresolved plugin-root reference" in output
+        assert "Ensure the quote marks match" in output
 
     def test_plugin_root_path_traversal_warns(self, temp_project, capsys):
         """A rejected traversal must remain visible to the package author."""

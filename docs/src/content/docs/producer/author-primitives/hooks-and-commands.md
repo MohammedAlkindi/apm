@@ -282,8 +282,8 @@ agent a procedure" fits a skill -- and reaches every harness.
   command transformer today, so any prompt-only metadata is dropped
   with a diagnostic. Keep Cursor commands to the preserved key set.
 - **Script paths.** Use `${PLUGIN_ROOT}` (or the harness-specific
-  alias) for scripts that ship inside the package. Quote the complete path when
-  it contains spaces. Plain absolute paths break on consumers' machines.
+  alias) for scripts that ship inside the package, using the quoting forms
+  described above. Plain absolute paths break on consumers' machines.
 - **Hook script path resolution.** `apm install -g` (user-scope)
   rewrites `${PLUGIN_ROOT}` and relative `./` references to absolute
   paths so Claude Code and Copilot CLI can execute scripts regardless

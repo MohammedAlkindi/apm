@@ -73,6 +73,7 @@ from apm_cli.integration.hook_command_paths import (
     plugin_root_relative_path,
     unresolved_plugin_root_references,
 )
+from apm_cli.integration.hook_command_warnings import warn_unresolved_plugin_root
 from apm_cli.integration.hook_file_routing import filter_hook_files_for_target
 from apm_cli.integration.hook_native_formats import (
     _to_antigravity_hook_entries,
@@ -688,13 +689,7 @@ class HookIntegrator(BaseIntegrator):
                     "Keep the path inside the package, then run apm install again."
                 )
                 continue
-            _rich_warning(
-                f"Unresolved plugin-root reference in package '{package_label}': "
-                f"{printable_ascii_text(residual)}. "
-                "Wrap the complete plugin-root reference and relative path in "
-                "balanced double quotes, "
-                "then run apm install again."
-            )
+            warn_unresolved_plugin_root(new_command, residual, package_label)
 
         for match in iter_relative_script_paths(new_command):
             rel_ref = match.group(1)
