@@ -1768,6 +1768,24 @@ class TestScriptPathRewriting:
         assert cmd == 'echo "${CLAUDE_PLUGIN_ROOT}"'
         assert "Unresolved plugin-root reference" in capsys.readouterr().out
 
+    def test_unparseable_plugin_root_warning_escapes_control_characters(
+        self, temp_project, capsys
+    ):
+        """A package-controlled residual cannot inject terminal controls."""
+        pkg_dir = temp_project / "pkg"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+
+        HookIntegrator()._rewrite_command_for_target(
+            'echo "${CLAUDE_PLUGIN_ROOT}\x1b[31m"',
+            pkg_dir,
+            "my-pkg",
+            "vscode",
+        )
+
+        out = capsys.readouterr().out
+        assert "\x1b[31m" not in out
+        assert "${CLAUDE_PLUGIN_ROOT}?[31m" in out
+
     def test_mismatched_quotes_around_plugin_root_warns(self, temp_project, capsys):
         """Mismatched quotes are not normalized, so the residual scan must report them."""
         pkg_dir = temp_project / "pkg"

@@ -81,6 +81,7 @@ from apm_cli.integration.hook_ownership import (
 )
 from apm_cli.utils.atomic_io import atomic_write_text
 from apm_cli.utils.console import _rich_warning
+from apm_cli.utils.diagnostics import printable_ascii_text
 from apm_cli.utils.path_security import (
     PathTraversalError,
     ensure_path_within,
@@ -735,7 +736,8 @@ class HookIntegrator(BaseIntegrator):
                 continue
             _rich_warning(
                 "Unresolved plugin-root reference in hook command: "
-                f"{residual}. Use ${{PLUGIN_ROOT}}/relative/path with matching double quotes."
+                f"{printable_ascii_text(residual)}. "
+                "Use ${PLUGIN_ROOT}/relative/path with matching double quotes."
             )
 
         # Replacements above cannot match this relative-path pattern.
