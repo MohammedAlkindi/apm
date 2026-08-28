@@ -33,7 +33,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from ..utils.git_sparse import apply_sparse_cone
+from ..utils.git_sparse import apply_sparse_cone, repair_dangling_cone_symlinks
 from ..utils.path_security import ensure_path_within
 from .integrity import verify_checkout_sha
 from .locking import atomic_land, cleanup_incomplete, shard_lock, stage_path
@@ -645,6 +645,27 @@ class GitCache:
                     env=subprocess_env,
                     check=True,
                 )
+                if sparse_paths:
+                    # Correctness repair, not a failure fallback (#2707):
+                    # if the cone left a dangling symlink (target outside
+                    # the requested paths), widen to a full checkout so
+                    # it resolves. Only fires when the narrow cone would
+                    # otherwise ship a broken checkout.
+                    dangling = repair_dangling_cone_symlinks(
+                        git_exe,
+                        staged,
+                        list(sparse_paths),
+                        env=subprocess_env,
+                        extra_git_args=_safe_git_args(),
+                    )
+                    if dangling is not None:
+                        _log.info(
+                            "Sparse-cone checkout of %s left a dangling symlink at "
+                            "%s (target outside the requested cone); widened to a "
+                            "full checkout so it resolves (#2707).",
+                            staged,
+                            dangling,
+                        )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
                 from ..utils.file_ops import robust_rmtree
 
