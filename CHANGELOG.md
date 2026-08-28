@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subdirectory; the checkout now widens to a full tree so the target
   resolves. Applies where git materializes real symlinks (`core.symlinks=true`;
   on Windows git defaults to `false` and checks these entries out as plain
-  files, a separate behavior #2707 does not cover). (#2707)
+  files, a separate behavior #2707 does not cover). (closes #2707, #2710)
 
 ## [0.29.0] - 2026-08-26
 
