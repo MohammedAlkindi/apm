@@ -388,7 +388,7 @@ class TestPartialBareFlavor:
 
         assert len(clone_commands) == 1
         assert "--filter=blob:none" in clone_commands[0]
-=======
+
 
 def _build_repo_with_out_of_cone_symlink_target(tmp_path: Path) -> tuple[Path, str]:
     """Repro shape for #2707: a symlink inside the cone, target outside it."""
