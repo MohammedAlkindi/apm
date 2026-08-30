@@ -1,6 +1,7 @@
 """GitHub package downloader for APM dependencies."""
 
 import contextlib
+import logging
 import os
 import re
 import subprocess
@@ -61,6 +62,8 @@ from .transport_selection import (
     ProtocolPreference,
     TransportSelector,
 )
+
+_log = logging.getLogger(__name__)
 
 # Public docs anchor for the cross-protocol fallback caveat surfaced by the
 # #786 warning. Lives under the dependencies guide, next to the canonical
@@ -1181,9 +1184,9 @@ class GitHubPackageDownloader:
                     env=repo_env,
                 )
                 if dangling is not None:
-                    _debug(
-                        "Sparse checkout widened to repair dangling symlink "
-                        f"'{dangling.relative_to(temp_clone_path)}'"
+                    _log.info(
+                        "Sparse checkout widened to repair dangling symlink '%s' (#2707).",
+                        dangling.relative_to(temp_clone_path),
                     )
                 return True
 

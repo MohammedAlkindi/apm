@@ -144,8 +144,8 @@ same commit share storage when they want the same subdirs, and keep
 distinct shards when they do not -- without the variant suffix the
 sparse checkout would clobber the full tree for any other consumer
 of that SHA. A sparse variant widens to the full tree when a package
-symlink targets another path in the same repository, so that variant
-can consume more disk than its name suggests.
+symlink targets a tracked file excluded from the sparse cone, so that
+variant can consume more disk than its name suggests.
 
 The cache root is created with mode `0700` and validated to be
 absolute with no NUL bytes before use.

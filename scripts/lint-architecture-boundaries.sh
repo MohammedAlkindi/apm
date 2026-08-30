@@ -1124,6 +1124,9 @@ sparse_cone_raw_set_hits=$(
 )
 if [ "$(grep -Ec '^def apply_sparse_cone\(' "$sparse_cone_owner")" -ne 1 ] \
     || [ "$(grep -Ec '^def repair_dangling_cone_symlinks\(' "$sparse_cone_owner")" -ne 1 ] \
+    || [ "$(grep -Ec '^def _literal_pathspec\(' "$sparse_cone_owner")" -ne 1 ] \
+    || [ "$(grep -Fc '"ls-tree",' "$sparse_cone_owner")" -ne 2 ] \
+    || [ "$(grep -Fc '_literal_pathspec(path)' "$sparse_cone_owner")" -ne 2 ] \
     || [ "$(grep -Ec '^    def _finalize_sparse_checkout\(' src/apm_cli/cache/git_cache.py)" -ne 1 ] \
     || [ "$(grep -Fc 'self._finalize_sparse_checkout(' src/apm_cli/cache/git_cache.py)" -ne 3 ] \
     || [ "$(grep -Fc 'repair_dangling_cone_symlinks(' src/apm_cli/cache/git_cache.py)" -ne 1 ] \

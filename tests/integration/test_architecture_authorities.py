@@ -67,6 +67,9 @@ def test_sparse_cone_materialization_has_single_owner() -> None:
 
     assert owner.count("def apply_sparse_cone(") == 1
     assert owner.count("def repair_dangling_cone_symlinks(") == 1
+    assert owner.count("def _literal_pathspec(") == 1
+    assert owner.count('"ls-tree",') == 2
+    assert owner.count("_literal_pathspec(path)") == 2
     assert git_cache.count("repair_dangling_cone_symlinks(") == 1
     assert git_cache.count("def _finalize_sparse_checkout(") == 1
     assert git_cache.count("self._finalize_sparse_checkout(") == 3

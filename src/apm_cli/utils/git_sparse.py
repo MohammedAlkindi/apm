@@ -18,6 +18,11 @@ from .path_security import PathTraversalError, ensure_path_within
 FULL_CHECKOUT_TIMEOUT_SECONDS = 300
 
 
+def _literal_pathspec(path: str) -> str:
+    """Return a Git pathspec that treats every character in *path* literally."""
+    return f":(literal){path}"
+
+
 def _tracked_symlinks(
     git_exe: str,
     repo_dir: Path,
@@ -37,7 +42,17 @@ def _tracked_symlinks(
         return []
     head = [git_exe, *(extra_git_args or [])]
     result = subprocess.run(
-        [*head, "-C", str(repo_dir), "ls-files", "-s", "-z", "--", *paths],
+        [
+            *head,
+            "-C",
+            str(repo_dir),
+            "ls-tree",
+            "-r",
+            "-z",
+            "HEAD",
+            "--",
+            *(_literal_pathspec(path) for path in paths),
+        ],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -90,14 +105,30 @@ def _first_dangling_tracked_symlink(
             target.relative_to(repo_dir.resolve()).as_posix() for _, target in targets
         ]
         result = subprocess.run(
-            [*head, "-C", str(repo_dir), "ls-files", "-z", "--", *relative_targets],
+            [
+                *head,
+                "-C",
+                str(repo_dir),
+                "ls-tree",
+                "-r",
+                "-z",
+                "HEAD",
+                "--",
+                *(_literal_pathspec(path) for path in relative_targets),
+            ],
             capture_output=True,
             text=True,
             timeout=timeout,
             env=env,
             check=True,
         )
-        tracked_files = {path for path in result.stdout.split("\0") if path}
+        tracked_files = {
+            relative
+            for record in result.stdout.split("\0")
+            if record
+            for _, separator, relative in (record.partition("\t"),)
+            if separator
+        }
     else:
         tracked_files = set()
 

@@ -23,10 +23,15 @@ from apm_cli.utils.path_security import PathTraversalError
 pytestmark = pytest.mark.component
 
 
-def _commit_symlink_repo(tmp_path: Path, target: str) -> Path:
+def _commit_symlink_repo(
+    tmp_path: Path,
+    target: str,
+    *,
+    package_path: str = "packages/tool",
+) -> Path:
     """Create a bare repo with a tracked symlink inside the package cone."""
     work = tmp_path / "work"
-    package = work / "packages" / "tool"
+    package = work / package_path
     shared = work / "shared"
     package.mkdir(parents=True)
     shared.mkdir()
@@ -172,3 +177,35 @@ def test_downloader_rejects_real_symlink_into_git_metadata(tmp_path: Path) -> No
         downloader.download_subdirectory_package(dep, target)
 
     assert not target.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Git materializes plain files by default on Windows")
+def test_downloader_treats_colon_prefixed_package_path_literally(tmp_path: Path) -> None:
+    """Git pathspec magic must not hide an external package symlink."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    package_path = ":(literal)pkg"
+    bare = _commit_symlink_repo(
+        tmp_path,
+        str(outside),
+        package_path=package_path,
+    )
+    consumer = tmp_path / "consumer"
+    subprocess.run(["git", "clone", "-q", str(bare), str(consumer)], check=True)
+    downloader = object.__new__(GitHubPackageDownloader)
+    downloader.install_logger = None
+    downloader.shared_clone_cache = None
+    downloader.persistent_git_cache = MagicMock()
+    downloader.persistent_git_cache.get_checkout.return_value = consumer
+    downloader.resolve_git_reference = lambda dep: MagicMock(resolved_commit="a" * 40)
+    downloader._cache_git_env = lambda dep: os.environ.copy()
+    downloader._git_env_dict = lambda: os.environ.copy()
+    dep = DependencyReference(
+        repo_url="owner/repo",
+        reference="main",
+        is_virtual=True,
+        virtual_path=package_path,
+    )
+
+    with pytest.raises(PathTraversalError, match="outside the allowed base directory"):
+        downloader.download_subdirectory_package(dep, tmp_path / "installed")
