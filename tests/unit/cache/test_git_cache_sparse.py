@@ -450,7 +450,6 @@ class TestDanglingSymlinkRepair:
         # (alpha/skill/ref.md) is deterministic once we know the shard
         # root, so match on the relative suffix instead.
         real_islink = os.path.islink
-        real_exists = os.path.exists
         rel_suffix = Path("alpha") / "skill" / "ref.md"
 
         def fake_islink(path):
@@ -459,10 +458,16 @@ class TestDanglingSymlinkRepair:
 
         def fake_exists(path):
             p = Path(path)
-            return False if p.parts[-3:] == rel_suffix.parts else real_exists(path)
+            if p.parts[-3:] == rel_suffix.parts:
+                return (p.parents[2] / "shared" / "ref.md").exists()
+            return os.path.lexists(path)
 
         monkeypatch.setattr(os.path, "islink", fake_islink)
         monkeypatch.setattr(os.path, "exists", fake_exists)
+        monkeypatch.setattr(
+            "apm_cli.utils.git_sparse._tracked_symlinks",
+            lambda *args, **kwargs: [Path(args[1]) / "alpha" / "skill" / "ref.md"],
+        )
 
         result = cache.get_checkout(url, "main", locked_sha=sha, sparse_paths=["alpha/skill"])
 

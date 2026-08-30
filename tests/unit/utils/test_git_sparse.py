@@ -9,17 +9,9 @@ any code that later dereferences it (a plain ``open()``,
 ``shutil.copytree`` without ``symlinks=True``) fails with
 ``FileNotFoundError``.
 
-This box cannot create real symlinks without Developer Mode /
-``SeCreateSymbolicLinkPrivilege`` (``os.symlink`` raises ``OSError``
-errno 22 / WinError 1314), and a real git checkout here writes a
-mode-120000 tree entry as a PLAIN FILE containing the target path
-text (verified: ``core.symlinks`` defaults to ``false`` on this
-filesystem), not a real symlink -- so the dangling-symlink failure
-cannot be reproduced end-to-end here. ``TestFindDanglingSymlink``
-below monkeypatches ``os.path.islink``/``os.path.exists`` to exercise
-the detection LOGIC in isolation from that platform limitation, and
-``TestRepairDanglingConeSymlinks`` does the same over a real sparse
-checkout to prove the repair step actually widens the working tree.
+The platform-neutral unit tests use a stand-in entry so they also run
+where Git has ``core.symlinks=false``. The real-symlink consumer path is
+covered in ``tests/integration/test_sparse_cone_symlink_repair.py``.
 """
 
 from __future__ import annotations
@@ -29,71 +21,9 @@ import subprocess
 from pathlib import Path
 
 from apm_cli.utils.git_sparse import (
-    _find_dangling_symlink,
     apply_sparse_cone,
     repair_dangling_cone_symlinks,
 )
-
-
-class TestFindDanglingSymlink:
-    def test_returns_none_for_plain_tree(self, tmp_path: Path):
-        base = tmp_path / "skills" / "better-writing"
-        (base / "references").mkdir(parents=True)
-        (base / "references" / "genre-tells.md").write_text("real content\n")
-        (base / "SKILL.md").write_text("skill\n")
-        assert _find_dangling_symlink(base) is None
-
-    def test_finds_dangling_symlink_nested(self, tmp_path: Path, monkeypatch):
-        base = tmp_path / "skills" / "better-writing"
-        (base / "references").mkdir(parents=True)
-        # Stand-in for a symlink: on this box a real one can't be created
-        # (WinError 1314), so a plain file marks where it WOULD be.
-        fake_link = base / "references" / "genre-tells.md"
-        fake_link.write_text("../../../references/genre-tells.md")
-
-        real_islink = os.path.islink
-        real_exists = os.path.exists
-
-        def fake_islink(path):
-            return True if Path(path) == fake_link else real_islink(path)
-
-        def fake_exists(path):
-            return False if Path(path) == fake_link else real_exists(path)
-
-        monkeypatch.setattr(os.path, "islink", fake_islink)
-        monkeypatch.setattr(os.path, "exists", fake_exists)
-
-        assert _find_dangling_symlink(base) == fake_link
-
-    def test_symlink_with_live_target_is_not_dangling(self, tmp_path: Path, monkeypatch):
-        base = tmp_path / "skills" / "better-writing"
-        base.mkdir(parents=True)
-        live_link = base / "ok.md"
-        live_link.write_text("target text")
-
-        real_islink = os.path.islink
-
-        def fake_islink(path):
-            return True if Path(path) == live_link else real_islink(path)
-
-        monkeypatch.setattr(os.path, "islink", fake_islink)
-        # exists() is untouched: the stand-in file genuinely exists.
-
-        assert _find_dangling_symlink(base) is None
-
-    def test_base_itself_dangling(self, tmp_path: Path, monkeypatch):
-        base = tmp_path / "dangling-root"
-        base.write_text("stand-in")
-
-        monkeypatch.setattr(os.path, "islink", lambda p: Path(p) == base)
-        monkeypatch.setattr(
-            os.path, "exists", lambda p: False if Path(p) == base else os.path.isfile(p)
-        )
-
-        assert _find_dangling_symlink(base) == base
-
-    def test_missing_base_returns_none(self, tmp_path: Path):
-        assert _find_dangling_symlink(tmp_path / "does-not-exist") is None
 
 
 def _build_local_bare_repo(tmp_path: Path) -> tuple[Path, str]:
@@ -161,16 +91,21 @@ class TestRepairDanglingConeSymlinks:
         assert fake_link.is_file()  # the stand-in checked out fine
 
         real_islink = os.path.islink
-        real_exists = os.path.exists
 
         def fake_islink(path):
             return True if Path(path) == fake_link else real_islink(path)
 
         def fake_exists(path):
-            return False if Path(path) == fake_link else real_exists(path)
+            if Path(path) == fake_link:
+                return (consumer / "references" / "genre-tells.md").exists()
+            return os.path.lexists(path)
 
         monkeypatch.setattr(os.path, "islink", fake_islink)
         monkeypatch.setattr(os.path, "exists", fake_exists)
+        monkeypatch.setattr(
+            "apm_cli.utils.git_sparse._tracked_symlinks",
+            lambda *args, **kwargs: [fake_link],
+        )
 
         result = repair_dangling_cone_symlinks(
             "git", consumer, ["skills/better-writing"], env=os.environ.copy()

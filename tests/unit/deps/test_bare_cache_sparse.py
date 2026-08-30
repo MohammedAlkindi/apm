@@ -158,16 +158,21 @@ def test_dangling_symlink_in_cone_is_repaired(tmp_path: Path, monkeypatch):
 
     fake_link = consumer / "plugins" / "skill" / "ref.md"
     real_islink = os.path.islink
-    real_exists = os.path.exists
 
     def fake_islink(path):
         return True if Path(path) == fake_link else real_islink(path)
 
     def fake_exists(path):
-        return False if Path(path) == fake_link else real_exists(path)
+        if Path(path) == fake_link:
+            return (consumer / "shared" / "ref.md").exists()
+        return os.path.lexists(path)
 
     monkeypatch.setattr(os.path, "islink", fake_islink)
     monkeypatch.setattr(os.path, "exists", fake_exists)
+    monkeypatch.setattr(
+        "apm_cli.utils.git_sparse._tracked_symlinks",
+        lambda *args, **kwargs: [fake_link],
+    )
 
     materialize_from_bare(
         bare,

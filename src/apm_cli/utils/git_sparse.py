@@ -13,31 +13,123 @@ import os
 import subprocess
 from pathlib import Path
 
+from .path_security import ensure_path_within
 
-def _find_dangling_symlink(base: Path) -> Path | None:
-    """Return the first dangling symlink found under *base*, or ``None``.
+FULL_CHECKOUT_TIMEOUT_SECONDS = 300
 
-    A sparse-cone checkout (perf #1433) only materializes the requested
-    top-level paths. If the payload under ``base`` contains a symlink
-    whose target lives outside the cone (e.g. ``ref.md ->
-    ../../../shared/ref.md``), the symlink entry itself is checked out
-    (it's inside the cone) but its target is not, leaving a dangling
-    symlink (#2707).
 
-    Uses ``os.path.islink``/``os.path.exists`` directly (rather than
-    ``Path.is_symlink``/``Path.exists``) so tests can monkeypatch the
-    check in isolation.
+def _tracked_symlinks(
+    git_exe: str,
+    repo_dir: Path,
+    paths: list[str],
+    *,
+    env: dict[str, str] | None,
+    timeout: int,
+    extra_git_args: list[str] | None,
+) -> list[Path]:
+    """Return materialized tracked symlinks under *paths*.
+
+    Git's index identifies mode-120000 entries without walking every file
+    in the cone. The filesystem check excludes platforms where Git writes
+    symlink entries as plain files because ``core.symlinks`` is disabled.
     """
-    if os.path.islink(base):
-        return None if os.path.exists(base) else base
-    if not os.path.isdir(base):
-        return None
-    for root, dirnames, filenames in os.walk(base, followlinks=False):
-        for name in (*dirnames, *filenames):
-            candidate = Path(root) / name
-            if os.path.islink(candidate) and not os.path.exists(candidate):
-                return candidate
+    if not paths:
+        return []
+    head = [git_exe, *(extra_git_args or [])]
+    result = subprocess.run(
+        [*head, "-C", str(repo_dir), "ls-files", "-s", "-z", "--", *paths],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+        check=True,
+    )
+    symlinks: list[Path] = []
+    for record in result.stdout.split("\0"):
+        metadata, separator, relative = record.partition("\t")
+        if separator and metadata.split(maxsplit=1)[0] == "120000":
+            candidate = repo_dir / relative
+            if os.path.islink(candidate):
+                symlinks.append(candidate)
+    return symlinks
+
+
+def _first_dangling_tracked_symlink(
+    git_exe: str,
+    repo_dir: Path,
+    paths: list[str],
+    *,
+    env: dict[str, str] | None,
+    timeout: int,
+    extra_git_args: list[str] | None,
+) -> Path | None:
+    """Validate tracked symlink containment and return the first broken link."""
+    for link in _tracked_symlinks(
+        git_exe,
+        repo_dir,
+        paths,
+        env=env,
+        timeout=timeout,
+        extra_git_args=extra_git_args,
+    ):
+        try:
+            raw_target = Path(os.readlink(link))
+        except OSError:
+            if not os.path.exists(link):
+                return link
+            continue
+        target = raw_target if raw_target.is_absolute() else link.parent / raw_target
+        ensure_path_within(target, repo_dir)
+        if not os.path.exists(link):
+            return link
     return None
+
+
+def validate_materialized_symlinks(
+    git_exe: str,
+    repo_dir: Path,
+    paths: list[str],
+    *,
+    env: dict[str, str] | None,
+    timeout: int = 30,
+    extra_git_args: list[str] | None = None,
+) -> None:
+    """Reject broken or checkout-escaping symlinks before package copy."""
+    dangling = _first_dangling_tracked_symlink(
+        git_exe,
+        repo_dir,
+        paths,
+        env=env,
+        timeout=timeout,
+        extra_git_args=extra_git_args,
+    )
+    if dangling is not None:
+        relative = dangling.relative_to(repo_dir)
+        raise RuntimeError(
+            f"Symlink '{relative}' is unresolved after materializing the repository; "
+            "repair its target in the package repository."
+        )
+
+
+def sparse_checkout_active(
+    git_exe: str,
+    repo_dir: Path,
+    *,
+    env: dict[str, str] | None,
+    timeout: int = 10,
+    extra_git_args: list[str] | None = None,
+) -> bool:
+    """Return whether Git still considers *repo_dir* a sparse checkout."""
+    head = [git_exe, *(extra_git_args or [])]
+    result = subprocess.run(
+        [*head, "-C", str(repo_dir), "config", "--bool", "core.sparseCheckout"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
 
 
 def repair_dangling_cone_symlinks(
@@ -46,14 +138,15 @@ def repair_dangling_cone_symlinks(
     paths: list[str],
     *,
     env: dict[str, str] | None,
-    timeout: int = 30,
+    timeout: int = FULL_CHECKOUT_TIMEOUT_SECONDS,
     extra_git_args: list[str] | None = None,
 ) -> Path | None:
     """Widen a cone checkout to a full tree if it left a dangling symlink.
 
     Call AFTER the cone checkout (``apply_sparse_cone`` + ``git
-    checkout``) completes. Walks the requested ``paths`` looking for a
-    symlink whose target was excluded by the cone. If one is found,
+    checkout``) completes. Queries the Git index for tracked symlinks in
+    the requested ``paths`` and checks whether a target was excluded by
+    the cone. If one is found,
     falls back to ``git sparse-checkout disable`` so every symlink
     target that exists anywhere in the tree resolves (#2707). In a plain
     clone the full tree repopulates from objects already fetched; in a
@@ -63,19 +156,22 @@ def repair_dangling_cone_symlinks(
     This trades the perf-#1433 disk savings for correctness on the repos
     that need it -- a dependency whose payload is mostly symlinks into
     the repo root loses the sparse win on every install. The common case
-    (no cross-cone symlinks) pays only the cost of walking the small
-    cone directory and never disables sparse-checkout.
+    (no cross-cone symlinks) checks only mode-120000 index entries and
+    never disables sparse-checkout.
 
     Returns:
         The first dangling symlink found (repo-relative resolution
         already applied by the caller's ``repo_dir``), or ``None`` if
         the cone had no dangling symlinks and no repair was needed.
     """
-    dangling: Path | None = None
-    for rel in paths:
-        dangling = _find_dangling_symlink(repo_dir / rel)
-        if dangling is not None:
-            break
+    dangling = _first_dangling_tracked_symlink(
+        git_exe,
+        repo_dir,
+        paths,
+        env=env,
+        timeout=timeout,
+        extra_git_args=extra_git_args,
+    )
     if dangling is None:
         return None
     head = [git_exe, *(extra_git_args or [])]
@@ -86,6 +182,14 @@ def repair_dangling_cone_symlinks(
         timeout=timeout,
         env=env,
         check=True,
+    )
+    validate_materialized_symlinks(
+        git_exe,
+        repo_dir,
+        paths,
+        env=env,
+        timeout=timeout,
+        extra_git_args=extra_git_args,
     )
     return dangling
 

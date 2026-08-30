@@ -37,12 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.29.0] - 2026-08-30
 ### Fixed
 
-- Sparse-cone subdirectory installs no longer leave dangling symlinks when a
-  dependency's payload contains a symlink pointing outside the requested
-  subdirectory; the checkout now widens to a full tree so the target
-  resolves. Applies where git materializes real symlinks (`core.symlinks=true`;
-  on Windows git defaults to `false` and checks these entries out as plain
-  files, a separate behavior #2707 does not cover). (closes #2707, #2710)
+- Git subdirectory dependencies with symlinks to files elsewhere in the same
+  repository now install successfully where Git materializes symlinks; APM
+  widens the checkout only when needed. On Windows, Git defaults to
+  `core.symlinks=false` and checks these entries out as plain files, which is
+  outside #2707's scope. (by @MohammedAlkindi, closes #2707, #2710)
 
 ## [0.29.0] - 2026-08-26
 
