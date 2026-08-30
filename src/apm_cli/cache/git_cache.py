@@ -695,6 +695,11 @@ class GitCache:
                         sparse_paths,
                         env=env,
                     )
+            except (RuntimeError, ValueError):
+                from ..utils.file_ops import robust_rmtree
+
+                robust_rmtree(staged, ignore_errors=True)
+                raise
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
                 from ..utils.file_ops import robust_rmtree
 

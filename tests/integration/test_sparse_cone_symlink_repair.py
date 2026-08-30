@@ -153,6 +153,34 @@ def test_persistent_cache_hit_repairs_preexisting_dangling_shard(tmp_path: Path)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Git materializes plain files by default on Windows")
+def test_invalid_symlink_cleans_persistent_cache_staging(tmp_path: Path) -> None:
+    """Validation failure must not leave nested incomplete cache shards."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    bare = _commit_symlink_repo(tmp_path, str(outside))
+    sha = subprocess.run(
+        ["git", "--git-dir", str(bare), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    cache_root = tmp_path / "cache"
+    cache = GitCache(cache_root)
+
+    with pytest.raises(PathTraversalError, match="outside the allowed base directory"):
+        cache.get_checkout(
+            bare.as_uri(),
+            "main",
+            locked_sha=sha,
+            env=os.environ.copy(),
+            sparse_paths=["packages/tool"],
+        )
+
+    checkout_root = cache_root / "git" / "checkouts_v1"
+    assert list(checkout_root.rglob("*.inc.*")) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Git materializes plain files by default on Windows")
 def test_downloader_rejects_real_symlink_into_git_metadata(tmp_path: Path) -> None:
     """The user-facing downloader must reject generated Git metadata targets."""
     bare = _commit_symlink_repo(tmp_path, "../../.git/config")
