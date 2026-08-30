@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from apm_cli.cache.git_cache import GitCache, _variant_key
+from apm_cli.cache.url_normalize import cache_shard_key
 from apm_cli.deps.github_downloader import GitHubPackageDownloader
 from apm_cli.models.apm_package import DependencyReference
 from apm_cli.utils.git_sparse import (
@@ -41,8 +43,9 @@ def _commit_symlink_repo(tmp_path: Path, target: str) -> Path:
     return bare
 
 
-def _checkout_sparse(tmp_path: Path, bare: Path) -> Path:
-    consumer = tmp_path / "consumer"
+def _checkout_sparse(tmp_path: Path, bare: Path, consumer: Path | None = None) -> Path:
+    consumer = consumer or tmp_path / "consumer"
+    consumer.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "clone", "-q", "--no-checkout", str(bare), str(consumer)],
         check=True,
@@ -79,7 +82,7 @@ def test_repair_rejects_link_that_remains_broken(tmp_path: Path) -> None:
     bare = _commit_symlink_repo(tmp_path, "../../missing/reference.md")
     consumer = _checkout_sparse(tmp_path, bare)
 
-    with pytest.raises(RuntimeError, match="repair its target in the package repository"):
+    with pytest.raises(PathTraversalError, match="not a tracked file in the checked-out commit"):
         repair_dangling_cone_symlinks(
             "git",
             consumer,
@@ -103,3 +106,69 @@ def test_materialization_rejects_symlink_outside_checkout(tmp_path: Path) -> Non
             ["packages/tool"],
             env=os.environ.copy(),
         )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Git materializes plain files by default on Windows")
+def test_persistent_cache_hit_repairs_preexisting_dangling_shard(tmp_path: Path) -> None:
+    """A cache variant created before #2707 must be repaired when reused."""
+    bare = _commit_symlink_repo(tmp_path, "../../shared/reference.md")
+    sha = subprocess.run(
+        ["git", "--git-dir", str(bare), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    cache_root = tmp_path / "cache"
+    cache = GitCache(cache_root)
+    url = bare.as_uri()
+    checkout = (
+        cache_root
+        / "git"
+        / "checkouts_v1"
+        / cache_shard_key(url)
+        / sha
+        / _variant_key(["packages/tool"])
+    )
+    _checkout_sparse(tmp_path, bare, checkout)
+    link = checkout / "packages" / "tool" / "reference.md"
+    assert link.is_symlink()
+    assert not link.exists()
+
+    result = cache.get_checkout(
+        url,
+        "main",
+        locked_sha=sha,
+        env=os.environ.copy(),
+        sparse_paths=["packages/tool"],
+    )
+
+    assert result == checkout
+    assert link.resolve().read_text(encoding="utf-8") == "shared content\n"
+    assert (checkout / "shared" / "reference.md").is_file()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Git materializes plain files by default on Windows")
+def test_downloader_rejects_real_symlink_into_git_metadata(tmp_path: Path) -> None:
+    """The user-facing downloader must reject generated Git metadata targets."""
+    bare = _commit_symlink_repo(tmp_path, "../../.git/config")
+    consumer = _checkout_sparse(tmp_path, bare)
+    downloader = object.__new__(GitHubPackageDownloader)
+    downloader.install_logger = None
+    downloader.shared_clone_cache = None
+    downloader.persistent_git_cache = MagicMock()
+    downloader.persistent_git_cache.get_checkout.return_value = consumer
+    downloader.resolve_git_reference = lambda dep: MagicMock(resolved_commit="a" * 40)
+    downloader._cache_git_env = lambda dep: os.environ.copy()
+    downloader._git_env_dict = lambda: os.environ.copy()
+    dep = DependencyReference(
+        repo_url="owner/repo",
+        reference="main",
+        is_virtual=True,
+        virtual_path="packages/tool",
+    )
+    target = tmp_path / "installed"
+
+    with pytest.raises(PathTraversalError, match="not a tracked file in the checked-out commit"):
+        downloader.download_subdirectory_package(dep, target)
+
+    assert not target.exists()

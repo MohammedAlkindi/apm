@@ -341,10 +341,11 @@ during contained package materialization:
 - **Manifest integrity** -- a malformed `apm.yml` (invalid YAML or non-mapping content) triggers a failing `manifest-parse` audit check. Policy and baseline CI checks never silently pass when the manifest cannot be parsed. If this check fires, fix the YAML syntax error in your `apm.yml` and re-run the audit.
 - **Archive creation** -- `apm pack` excludes symlinks from bundled archives. Packaged artifacts contain no symbolic links, preventing symlink-based escape attacks in distributed bundles.
 
-Remote Git subdirectory installs can dereference a symlink whose target is in
-the same checked-out commit. If sparse checkout excluded that target, APM
-widens the checkout before copying the package. Targets outside the repository
-and links that remain broken after widening hard-fail the install.
+Remote Git subdirectory installs can dereference a symlink whose target is a
+tracked file in the same checked-out commit. If sparse checkout excluded that
+target, APM widens the checkout before copying the package. Generated Git
+metadata, targets outside the repository, and links that remain broken after
+widening hard-fail the install.
 
 #### Local-install symlink dereference and containment guarantee
 

@@ -13,7 +13,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from .path_security import ensure_path_within
+from .path_security import PathTraversalError, ensure_path_within
 
 FULL_CHECKOUT_TIMEOUT_SECONDS = 300
 
@@ -64,14 +64,16 @@ def _first_dangling_tracked_symlink(
     extra_git_args: list[str] | None,
 ) -> Path | None:
     """Validate tracked symlink containment and return the first broken link."""
-    for link in _tracked_symlinks(
+    symlinks = _tracked_symlinks(
         git_exe,
         repo_dir,
         paths,
         env=env,
         timeout=timeout,
         extra_git_args=extra_git_args,
-    ):
+    )
+    targets: list[tuple[Path, Path]] = []
+    for link in symlinks:
         try:
             raw_target = Path(os.readlink(link))
         except OSError:
@@ -79,7 +81,34 @@ def _first_dangling_tracked_symlink(
                 return link
             continue
         target = raw_target if raw_target.is_absolute() else link.parent / raw_target
-        ensure_path_within(target, repo_dir)
+        resolved_target = ensure_path_within(target, repo_dir)
+        targets.append((link, resolved_target))
+
+    if targets:
+        head = [git_exe, *(extra_git_args or [])]
+        relative_targets = [
+            target.relative_to(repo_dir.resolve()).as_posix() for _, target in targets
+        ]
+        result = subprocess.run(
+            [*head, "-C", str(repo_dir), "ls-files", "-z", "--", *relative_targets],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            check=True,
+        )
+        tracked_files = {path for path in result.stdout.split("\0") if path}
+    else:
+        tracked_files = set()
+
+    for link, resolved_target in targets:
+        relative_target = resolved_target.relative_to(repo_dir.resolve()).as_posix()
+        if relative_target not in tracked_files:
+            relative_link = link.relative_to(repo_dir)
+            raise PathTraversalError(
+                f"Symlink '{relative_link}' targets '{relative_target}', which is not "
+                "a tracked file in the checked-out commit."
+            )
         if not os.path.exists(link):
             return link
     return None
