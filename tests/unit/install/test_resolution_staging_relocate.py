@@ -199,6 +199,7 @@ def test_case_only_relocation_updates_spelling_and_rolls_back(tmp_path: Path) ->
     assert [path.name for path in modules.iterdir()] == ["mixedorg"]
 
 
+@pytest.mark.windows_compat
 def test_prepare_replacement_slot_names_fit_windows_max_path(tmp_path: Path) -> None:
     """A realistic staged path must not overflow Windows MAX_PATH (issue #2896).
 
