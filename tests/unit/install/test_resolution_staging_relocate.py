@@ -246,3 +246,26 @@ def test_prepare_replacement_slot_names_fit_windows_max_path(tmp_path: Path) -> 
 
     assert len(realistic_root) + 1 + relative_len <= 260
     assert len(realistic_root) + 1 + old_scheme_relative_len > 260
+
+    # The assertions above stop at the slot directory, but real installs write the
+    # package's own files beneath it, and that deepest staged file is the budget
+    # that actually matters. Express it as headroom -- the longest project root
+    # that still fits -- so the guard does not depend on one hand-picked path.
+    nested_payload = Path("partials") / "order-confirmation-email-template.html.hbs"
+    nested_len = relative_len + 1 + len(str(nested_payload))
+    old_scheme_nested_len = old_scheme_relative_len + 1 + len(str(nested_payload))
+    root_budget = 260 - 1 - nested_len
+    old_scheme_root_budget = 260 - 1 - old_scheme_nested_len
+
+    assert root_budget - old_scheme_root_budget == (32 - 12) + (64 - 16)
+
+    # A project root between those two budgets installs only after the fix. Note
+    # this is headroom, not a long-path guarantee: the 134-character OneDrive root
+    # above still overflows once nested package content is appended.
+    moderate_root = (
+        r"C:\Users\jennifer.smith\source\repos\internal-tools-platform"
+        r"\services\billing-reconciliation-worker"
+    )
+    assert old_scheme_root_budget < len(moderate_root) <= root_budget
+    assert len(moderate_root) + 1 + nested_len <= 260
+    assert len(moderate_root) + 1 + old_scheme_nested_len > 260
