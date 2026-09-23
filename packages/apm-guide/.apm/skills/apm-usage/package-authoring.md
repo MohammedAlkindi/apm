@@ -11,8 +11,17 @@ how to install it:
 | `SKILL.md` (alone, or with apm.yml = HYBRID) | One skill bundle | Copy whole tree to `<target>/skills/<name>/` |
 | `skills/<name>/SKILL.md` | Many skills in one repo | Promote each nested skill to `<target>/skills/<name>/` |
 | `hooks/*.json` only | Harness hook package | Deploy hooks to the target's hooks directory |
-| `plugin.json` (no `$schema`) / `.claude-plugin/` | Claude plugin collection | Dissect via plugin artifact mapping |
-| `plugin.json` with an Agent Plugins `$schema` | Portable Agent Plugin | Not yet installable -- fails closed |
+| `plugin.json` (no `$schema`, or unrecognized `$schema`) / `.claude-plugin/` | Claude plugin collection | Dissect via plugin artifact mapping |
+| `plugin.json` with the recognized Agent Plugins `$schema` | Portable Agent Plugin | Acquired and locked as one opaque unit; registered when effective targets include Copilot and admission gates pass. Excluded targets create no native registration or loose primitive projection. APM does not require the runtime during lifecycle operations; loading requires supported Copilot CLI 1.0.81 or newer |
+
+When plugin signals coexist with an eligible `apm.yml`, the APM layout wins.
+An `apm.yml` is eligible when the root also has `.apm/` or the manifest
+declares APM or MCP dependencies. To intentionally select a plugin layout,
+omit `apm.yml` or keep it metadata-only, without `.apm/` or dependencies.
+
+For Agent Plugins with the same declared name, a direct dependency wins over a
+transitive dependency. APM refuses same-precedence collisions and does not
+silently repoint a ledger-recorded owner to a transitive claimant.
 
 The HYBRID layout (apm.yml + SKILL.md) is a single skill bundle that
 also uses APM dependency resolution. APM installs it as a skill -- it
@@ -35,10 +44,11 @@ backfills one from the other:
 - `name` and `version` must be non-empty strings. Quote numeric versions so
   YAML does not parse them as numbers.
 
-Use the standard `$schema` key when authoring against normative OpenAPM v0.1:
-`https://microsoft.github.io/apm/specs/schemas/manifest-v0.1.schema.json`.
-Omitting `$schema` selects APM's current working draft. Unknown schema
-identities fail closed rather than being interpreted as the working draft.
+For alias-aware OpenAPM v0.1, amendment 0.1.41 selects
+`https://microsoft.github.io/apm/specs/schemas/manifest-v0.1.41.schema.json`
+as the `$schema` identity; see [schema status](../../../../../docs/src/content/docs/specs/openapm-v0.1.md#appendix-a-normative-json-schemas-inline).
+Omit `$schema` for APM's current working draft. Unknown identities fail closed;
+clients without 0.1.41 support cannot read that explicit opt-in.
 
 Populate both descriptions when you ship a HYBRID package. `apm pack`
 warns when `apm.yml.description` is missing so listings do not
@@ -100,6 +110,9 @@ debug bridges, and other author-only servers in
 `devDependencies.mcp`. The root package receives both sections in its
 authoring environment; consumers of that package receive only
 `dependencies.mcp`, including when the package is nested transitively.
+Adding either kind of MCP dependency makes the root `apm.yml` eligible, so
+direct installs select the APM package layout over a co-located plugin
+manifest. Keep `apm.yml` metadata-only to preserve plugin selection.
 See [MCP dependency formats](dependencies.md#mcp-dependency-formats).
 
 ## Hook files
@@ -168,6 +181,7 @@ hook action under `.kiro/hooks/`.
 |----------------|---------------------|-------------------|
 | `SessionStart`, `sessionStart` | `sessionStart` | `SessionStart` |
 | `Stop`, `AgentStop`, `agentStop` | `agentStop` | `Stop` |
+| `UserPromptSubmit`, `userPromptSubmit`, `userPromptSubmitted` | `userPromptSubmitted` | `UserPromptSubmit` (native; the other two spellings are not renamed and will not fire) |
 
 Event names absent from this table are preserved unchanged. Only an unmapped
 camelCase or PascalCase name that conflicts with the target convention emits
@@ -294,6 +308,17 @@ for this package. Add a 'license:' field ...`). The SBOM still exports
 correctly -- the component just records NOASSERTION (genuinely unknown).
 This warning fires only on the **authoring** path (your own `apm.yml`);
 installing or exporting other people's dependencies is silent.
+
+Encode primitive Markdown as UTF-8. Frontmatter requirements vary by Markdown
+primitive type. When frontmatter is present, its opening fence of at least
+three hyphens (for example, `---`) must be the first content on line 1; an
+optional UTF-8 BOM may precede it and is stripped before parsing. Without that
+opening fence, APM treats the whole document as body content, and later `---`
+lines stay Markdown horizontal rules. Malformed instruction frontmatter stops
+the package before any primitive is deployed. Critical hidden characters
+decoded from metadata also prevent installation by default; `--force`
+overrides only that critical finding, while warning-level findings do not
+prevent installation.
 
 ## The 7 primitive types
 
@@ -529,6 +554,10 @@ An omitted key discovers root `skills/`; an explicit `[]` deploys none. If APM
 reports `plugin.json declares no deployable skills`, add the intended paths or
 remove the key to restore discovery.
 
+APM treats an unrecognized `plugin.json` `$schema` as an identification miss,
+not a rejection. It warns, then classifies by structure. Only the recognized
+Agent Plugins schema selects the portable Agent Plugin route.
+
 #### Shipping `bin/` executables (Claude Code only)
 
 A marketplace plugin may ship a root `bin/` directory of executable
@@ -666,7 +695,9 @@ registries:
     url: https://registry.example.com/apm/corp-main
 EOF
 
-# 3. Set a publish token (per-registry env var)
+# 3. Bind the destination in user config, then set a publish token
+apm config set registry.corp-main.url \
+  https://registry.example.com/apm/corp-main
 export APM_REGISTRY_TOKEN_CORP_MAIN=eyJ...
 
 # 4. Preview then publish

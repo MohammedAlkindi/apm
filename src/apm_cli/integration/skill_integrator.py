@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from apm_cli.install.deployed_paths import deployed_path_entry
 from apm_cli.install.services import enforce_agent_plugin_deployment_boundary
 from apm_cli.integration.base_integrator import BaseIntegrator
 from apm_cli.integration.skill_package_routing import (
@@ -386,10 +387,9 @@ class SkillIntegrator(BaseIntegrator):
     """
 
     def __init__(self) -> None:
-        # In-memory map of skill_name -> dep.get_unique_key() updated as each native
-        # skill is deployed in the current install run.  Complements the lockfile-based
-        # map so that same-manifest collisions are detected before the lockfile is written.
-        self._native_skill_session_owners: dict[str, str] = {}
+        # Only successful writes establish same-run ownership, keyed by the
+        # actual destination rather than a basename shared by several targets.
+        self._native_skill_session_owners: dict[Path, str | None] = {}
 
     @staticmethod
     def _target_skills_root(target: TargetProfile, project_root: Path) -> Path:
@@ -618,9 +618,18 @@ class SkillIntegrator(BaseIntegrator):
         if (package_path / "SKILL.md").is_file():
             return None
 
-        return frozenset(
-            SkillIntegrator.skill_source_paths(package_path, package_info.package_type)
-        )
+        source_paths = SkillIntegrator.skill_source_paths(package_path, package_info.package_type)
+        from apm_cli.deps.plugin_parser import normalized_plugin_skill_sources
+
+        plugin_source_paths, declared = normalized_plugin_skill_sources(package_path)
+        if declared:
+            source_paths = {**source_paths, **plugin_source_paths}
+        available = set(source_paths)
+        skills_root = package_path / "skills"
+        for source_path in source_paths.values():
+            if source_path.is_relative_to(skills_root):
+                available.add(source_path.relative_to(skills_root).as_posix())
+        return frozenset(available)
 
     @staticmethod
     def _skill_filter_misses_available(
@@ -855,21 +864,11 @@ class SkillIntegrator(BaseIntegrator):
 
     @staticmethod
     def _build_ownership_maps(project_root: Path) -> tuple[dict[str, str], dict[str, str]]:
-        """Read the lockfile once and build two ownership maps.
+        """Read sub-skill name and native-skill destination ownership once.
 
-        Returns a tuple of:
-        - owned_by: skill_name -> dep.get_unique_key(), for sub-skill self-overwrite detection.
-        - native_owners: skill_name -> dep.get_unique_key(), for native-skill cross-package
-          collision detection.  Only paths under a ``/skills/`` prefix are included to avoid
-          false attribution from non-skill deployed_files entries (prompts, hooks, commands, etc.).
-
-        Both maps key on the full unique dependency identity (owner/repo, or the
-        equivalent durable key for local/registry deps), NOT the last path
-        segment. Two different packages can share a repo/leaf name (e.g. two
-        orgs each publishing a "shared-skill" or "utils" repo); comparing only
-        the last segment would treat them as the same owner and silently
-        suppress the cross-package collision warning precisely when it matters
-        most -- an unrelated package overwriting another's skill undetected.
+        Both maps store full dependency identities, never ambiguous basenames.
+        Native ownership includes only ``/skills/`` paths, so unrelated
+        artifacts or another target's same-named skill cannot confer ownership.
         """
         from apm_cli.deps.lockfile import LockFile, get_lockfile_path
 
@@ -888,7 +887,7 @@ class SkillIntegrator(BaseIntegrator):
                 # Native-owner map is scoped to skill paths only to avoid false
                 # attribution from prompts/hooks/commands that share a leaf name.
                 if "/skills/" in normalized:
-                    native_owners[skill_name] = unique_key
+                    native_owners[normalized] = unique_key
         return owned_by, native_owners
 
     @staticmethod
@@ -908,7 +907,7 @@ class SkillIntegrator(BaseIntegrator):
         Scoped to ``/skills/`` paths only -- see ``_build_ownership_maps`` for details.
         """
         _, native_owners = SkillIntegrator._build_ownership_maps(project_root)
-        return native_owners
+        return {path.rsplit("/", 1)[-1]: owner for path, owner in native_owners.items()}
 
     def _promote_sub_skills_standalone(
         self,
@@ -1107,6 +1106,10 @@ class SkillIntegrator(BaseIntegrator):
 
         # Read lockfile once and derive both maps in a single pass.
         owned_by, lockfile_native_owners = self._build_ownership_maps(project_root)
+        # Install supplies the pre-normalized set; do not rescan it per package.
+        collision_managed = (
+            managed_files if managed_files is not None else set(lockfile_native_owners)
+        )
         sub_skills_dir = package_path / ".apm" / "skills"
 
         # Full unique key of the package currently being installed.
@@ -1115,11 +1118,11 @@ class SkillIntegrator(BaseIntegrator):
 
         seen_skill_dirs: set[Path] = set()
 
-        for idx, target in enumerate(targets):
+        for target in targets:
             if not target.supports("skills"):
                 continue
 
-            is_primary = idx == 0  # first active target owns diagnostics
+            is_primary = primary_skill_md is None  # first successful target owns result/diagnostics
             skills_mapping = target.primitives["skills"]
             # Static targets still need the effective root for the containment guard below.
             effective_root = skills_mapping.deploy_root or target.root_dir
@@ -1151,6 +1154,17 @@ class SkillIntegrator(BaseIntegrator):
                 continue
             seen_skill_dirs.add(resolved)
 
+            rel_path = deployed_path_entry(target_skill_dir, project_root, [target])
+            session_owned = resolved in self._native_skill_session_owners
+            if self.check_collision(
+                target_skill_dir,
+                rel_path,
+                {rel_path} if session_owned else collision_managed,
+                force,
+                diagnostics=diagnostics,
+            ):
+                continue
+
             if is_primary:
                 skill_created = not target_skill_dir.exists()
                 skill_updated = not skill_created
@@ -1162,8 +1176,8 @@ class SkillIntegrator(BaseIntegrator):
                     # map (current run) so that same-manifest collisions are caught even
                     # before the lockfile has been written for this run.
                     prev_owner = lockfile_native_owners.get(
-                        skill_name
-                    ) or self._native_skill_session_owners.get(skill_name)
+                        rel_path
+                    ) or self._native_skill_session_owners.get(resolved)
                     is_self_overwrite = prev_owner is not None and prev_owner == current_key
                     if prev_owner is not None and not is_self_overwrite:
                         try:
@@ -1213,6 +1227,7 @@ class SkillIntegrator(BaseIntegrator):
             )
             self._resolve_markdown_links_in_skill_bundle(package_path, target_skill_dir)
             all_target_paths.append(target_skill_dir)
+            self._native_skill_session_owners[resolved] = current_key
 
             if is_primary:
                 files_copied = sum(1 for _ in target_skill_dir.rglob("*") if _.is_file())
@@ -1238,11 +1253,6 @@ class SkillIntegrator(BaseIntegrator):
             )
             all_target_paths.extend(sub_deployed)
 
-        # Record ownership in the session map so subsequent packages installed in
-        # the same run can detect a collision even before the lockfile is written.
-        if current_key is not None:
-            self._native_skill_session_owners[skill_name] = current_key
-
         # Count unique sub-skills from primary target only
         primary_root = project_root / ".github" / "skills"
         sub_skills_count = sum(
@@ -1252,7 +1262,7 @@ class SkillIntegrator(BaseIntegrator):
         return SkillIntegrationResult(
             skill_created=skill_created,
             skill_updated=skill_updated,
-            skill_skipped=False,
+            skill_skipped=not all_target_paths,
             skill_path=primary_skill_md,
             references_copied=files_copied,
             links_resolved=0,
