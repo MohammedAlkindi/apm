@@ -705,9 +705,16 @@ def test_preserved_nested_command_layout_is_visible_non_prompt(
     payload = json.dumps({"version": 1, "hooks": {"PreToolUse": [entry]}})
     path.write_text(payload, encoding="utf-8")
     result = scan_project_result(project, targets=(profile,))
-    assert result.incomplete == ()
     assert result.findings_by_file == {}
-    assert [entry.status for entry in result.inventory] == ["not-applicable"]
+    if target == "cursor" and nested:
+        # Cursor loads only flat handlers, so a nested group is reported, not read.
+        assert [(entry.pointer, entry.diagnostic) for entry in result.incomplete] == [
+            ("/hooks/PreToolUse/0", "native hook event requires flat handlers")
+        ]
+        assert [entry.status for entry in result.inventory] == ["incomplete"]
+    else:
+        assert result.incomplete == ()
+        assert [entry.status for entry in result.inventory] == ["not-applicable"]
     assert path.read_text() == payload
     assert not list(project.glob("HOOK_MUST_NOT_RUN*"))
 
