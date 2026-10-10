@@ -80,19 +80,6 @@ def _user_owned_entry(target: str) -> dict:
     return {"matcher": "Bash", "hooks": [command]}
 
 
-def _is_user_owned(entry: object) -> bool:
-    if not isinstance(entry, dict):
-        return False
-    handlers = entry.get("hooks")
-    if isinstance(handlers, list):
-        return (
-            bool(handlers)
-            and isinstance(handlers[0], dict)
-            and (handlers[0].get("command") == "echo user-owned")
-        )
-    return entry.get("command") == "echo user-owned"
-
-
 def _load_sources(
     project: Path,
     settings_rel: str,
@@ -217,7 +204,7 @@ def test_root_hook_source_drift_heals_on_reinstall(
 
     settings_data = json.loads(settings_path.read_text(encoding="utf-8"))
     entries = settings_data.get("hooks", {}).get(event_key, [])
-    user_owned = [e for e in entries if _is_user_owned(e)]
+    user_owned = [e for e in entries if e == user_entry]
     assert len(user_owned) == 1, (
         f"User-owned hook entry must survive healing for {target}; entries={entries}"
     )
